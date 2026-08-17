@@ -1,21 +1,63 @@
-# Golden scaffold defaults — per-run repos overwrite provenance via the
-# app-migration template stamp. analysis.targets is the harness contract
-# (AD-003 amendment A): --target only, never --source.
+# Migration provenance + harness contract — stamped by the app-migration
+# template. Specimen-layering: the golden scaffold stays specimen-free; this
+# skeleton is the only place demo-specimen contracts are written.
 #
-# Specimen-agnostic (Deputy E-20260813T184217Z): golden must NOT ship a demo
-# legacyBasePackage / path_rewrites. Stamp comes from the RHDH app-migration
-# template or from M1 inventory derive — never inherit a specimen by copy.
+# Profile selection is by legacyRepoUrl (known demo freeze-forks). Unknown
+# URLs get provenance + analysis only and contract.status: undecided — never
+# Coolstore cart literals. Do not "edit after create" for the two demo
+# specimens; recreate from the template if the stamp is wrong.
+# {% set %} (not {%- set -%}): stripping eats the newline before migration:
+
+
+
 migration:
-  legacyRepoUrl: ""
+  legacyRepoUrl: https://github.com/adnan-drina/spring-petclinic-rest-legacy
   target: quarkus
-  provisionedBy: quarkus-migration-scaffold
-  needsDatabase: false
-  legacyBasePackage: ""
-  path_rewrites: []
+  provisionedBy: app-migration golden-path template
+  needsDatabase: True
+  legacyBasePackage: org.springframework.samples.petclinic
+  legacyPackage: org.springframework.samples.petclinic
+  targetPackage: com.demo
+  path_rewrites:
+    - from: src/main/java/com/demo/
+      to: src/main/java/org/springframework/samples/petclinic/
+    - from: src/test/java/com/demo/
+      to: src/test/java/org/springframework/samples/petclinic/
+acceptance:
+  # Validated showcase stamp (petclinic-rest-v5 / O-ACCEPTREAL).
+  path: /petclinic/api/vets
+  collection: _array
+  getter: getAllVets
+  service: VetRestController
+  itemType: VetDto
+  needsDatabase: True
+  idFields: [id]
 
 analysis:
+  # AD-003A: --target only, never --source. openjdk21 kept (O-OPENJDK21TARGET).
+  mode: source-only
   targets:
     - quarkus
     - jakarta-ee9
     - cloud-readiness
+    - openjdk17
     - openjdk21
+targetContract:
+  validateInput: true
+  mapErrors: true
+  getIdempotent: true
+  threadSafeState: false
+  cacheRefreshGuard: true
+  normalizeBeforeDerive: false
+configTransforms:
+  - from: server.port
+    to: quarkus.http.port
+    valueMap:
+      "9966": "8080"
+preserve:
+  - petclinic.security.enable
+  - server.servlet.context-path
+forbidden: []
+contract:
+  status: decided
+  profile: spring-petclinic-rest-legacy

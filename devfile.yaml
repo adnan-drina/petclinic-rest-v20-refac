@@ -1,36 +1,36 @@
 schemaVersion: 2.2.0
 metadata:
-  name: quarkus-migration-scaffold
+  name: petclinic-rest-v20-refac
 attributes:
   # Per-workspace PVC: the shared per-user claim is RWO and multi-attaches
   # when a second workspace starts while another is running (observed
   # live on round3's first start; run #2's workspace was patched by hand).
   controller.devfile.io/storage-type: per-workspace
-# This golden copy defines a SINGLE-project workspace (itself). The real
-# migration workspace layout — two projects, fixed order — exists only in
-# per-run repositories, stamped by the app-migration template's skeleton
-# devfile (the authoritative workspace shape):
+# Migration workspace layout — two projects, fixed order:
 #   /projects/legacy      the application being migrated (workspace-only
-#                         clone of ${{ values.legacyRepoUrl }}; never
-#                         registered in the catalog, no write credentials;
-#                         FIRST because the MTA VS Code extension analyzes
-#                         the first workspace folder in multi-root mode)
-#   /projects/modernized  the per-run Quarkus destination repository
-# No specimen/legacy URL belongs in this golden copy — specimen data enters
-# only via the template form at provisioning time.
+#                         clone of the legacy repository; never registered
+#                         in the catalog, no write credentials)
+#   /projects/modernized  this repository — the Quarkus destination that is
+#                         catalog-registered and CI/CD-wired
+# `legacy` is FIRST on purpose: the MTA VS Code extension analyzes the
+# first workspace folder in multi-root mode.
 projects:
+  - name: legacy
+    git:
+      remotes:
+        origin: https://github.com/adnan-drina/spring-petclinic-rest-legacy
   - name: modernized
     git:
       remotes:
-        origin: https://github.com/adnan-drina/quarkus-migration-scaffold.git
+        origin: https://github.com/adnan-drina/petclinic-rest-v20-refac.git
       checkoutFrom:
         revision: main
 components:
   - name: development-tooling
     container:
-      # Standard workspace base: the same Red Hat UDI used by every
-      # workspace on this platform, so the Java/Maven foundation is
-      # uniform across stages. The workspace is OpenCode-only by design (the modernized
+      # Standard workspace base: the same Red Hat UDI every coolstore
+      # workspace uses, so the Java/Maven foundation is uniform across
+      # stages. The workspace is OpenCode-only by design (the modernized
       # project's .opencode/ directory is the tool-selector signal) and
       # carries the MTA VS Code extension pack for analyzing the legacy
       # project against the platform MTA hub.
@@ -76,8 +76,7 @@ components:
           value: "8G"
         # AD-H §14 / Deputy E-20260813T152939Z — container-wide Hermes paths.
         # Must NOT depend on login-shell .bashrc export: non-login processes
-        # (cron, bare sh -c, daemons) otherwise fall back to ~/.hermes and
-        # load the generic auto-seeded SOUL decoy.
+        # otherwise fall back to ~/.hermes and load the generic SOUL decoy.
         - name: HERMES_HOME
           value: "/projects/modernized/.hermes/home"
         - name: HERMES_MANAGED_DIR
@@ -87,8 +86,9 @@ components:
       volumeMounts:
         - name: m2
           path: /home/user/.m2
-        # CS-1: OpenCode managed config (/etc/opencode) — writable volume
-        # for workspace user (Architect E-061618Z).
+        # CS-1: OpenCode managed config dir (/etc/opencode). Workspace
+        # user cannot write root-owned /etc; this volume makes the
+        # official managed path writable (Architect E-061618Z).
         - name: opencode-managed
           path: /etc/opencode
       endpoints:
@@ -98,8 +98,11 @@ components:
           secure: false
           protocol: https
         # Hermes dashboard — Operator E-20260812T171806Z W1 rider:
-        # bind is 0.0.0.0:9119 (auth-gated via seeded basic_auth); che-gateway
-        # endpoint (public + secure) for OAuth-wrapped viewer path.
+        # binds 0.0.0.0:9119 — che-gateway routes to the
+        # pod IP (not pod-localhost), so a localhost bind 503s the route.
+        # Public bind is auth-gated: Managed Scope seeds dashboard.basic_auth
+        # (product refuses unauthenticated non-localhost bind). Verify on
+        # fresh-seat: endpoint reachable + basic-auth login + board renders.
         - name: hermes-dash
           targetPort: 9119
           exposure: public
@@ -125,9 +128,9 @@ commands:
         # the modernized project (it carries .opencode/ -> OpenCode-only).
         PROJECT_DIR="/projects/modernized"
         PROFILE="modernized"
-        # Prefer JAVA_HOME_21 from the UDI image contract. This seat's
-        # udi-rhel9 image does not ship sdkman (Deputy E-20260814T064712Z);
-        # the ~/.sdkman candidates below are defensive fallbacks only.
+        # The UDI base image documents JAVA_HOME_<version> variables as the
+        # supported way to select a JDK; its sdkman default (plain
+        # JAVA_HOME) is Java 17, while this project targets 21.
         java21_home="${JAVA_HOME_21:-}"
         if [ -z "${java21_home}" ] || [ ! -x "${java21_home}/bin/java" ]; then
           for candidate in \
@@ -145,10 +148,10 @@ commands:
           export PATH="${JAVA_HOME}/bin:${PATH}"
           for rc in "${HOME}/.bashrc" "${HOME}/.zshrc"; do
             touch "${rc}"
-            if ! grep -q "quarkus-migration-scaffold: java 21 default" "${rc}"; then
+            if ! grep -q "rhoai3-coding-demo: java 21 default" "${rc}"; then
               {
                 printf '\n'
-                printf '# quarkus-migration-scaffold: java 21 default\n'
+                printf '# rhoai3-coding-demo: java 21 default\n'
                 printf 'export JAVA_HOME="%s"\n' "${java21_home}"
                 printf 'export PATH="${JAVA_HOME}/bin:${PATH}"\n'
               } >> "${rc}"
@@ -201,6 +204,8 @@ commands:
         fi
         # AD-S / provision-owns-tools (Architect E-20260811T121308Z): Spec Kit
         # init is workspace setup — fail-closed; agents verify-or-BLOCK only.
+        # Path must match golden skill tree (UPLIFT-6 + sdd/ category): Operator
+        # E-20260813T175514Z — stale specify-workspace-init silently WARN'd.
         SPECIFY_INIT="${PROJECT_DIR}/.hermes/skills/sdd/init-spec-workspace/scripts/init-workspace.sh"
         if [ -f "${SPECIFY_INIT}" ]; then
           bash "${SPECIFY_INIT}" "${PROJECT_DIR}" \
@@ -233,6 +238,8 @@ commands:
         # RH registry-first ~/.quarkus/config.yaml. User-space via JBang into
         # ~/.local|~/.jbang (no root / no rsync / no custom image). Idempotent.
         # Failure is WARN — Maven quarkus:* remains (W3 typed fallback).
+        # Skeleton must carry this string: fetch:template overwrites golden
+        # devfile.yaml and create-path tip-sync greps this filename (v18 M1).
         PROVISION_CLI="${PROJECT_DIR}/.hermes/skills/migration/manage-quarkus-extensions/scripts/provision-quarkus-cli.sh"
         if [ -f "${PROVISION_CLI}" ]; then
           export PATH="${HOME}/.local/bin:${HOME}/.jbang/bin:${PATH}"
@@ -244,7 +251,8 @@ commands:
   - id: start-hermes-dashboard
     exec:
       component: development-tooling
-      # Operator E-20260812T171806Z — loopback bind + che-gateway secure endpoint.
+      # Operator E-20260812T171806Z: loopback bind + che-gateway endpoint
+      # (secure public). Fail-soft: missing Hermes / pre-warm must not block IDE.
       commandLine: |
         set +e
         export PATH="${HOME}/.local/bin:${PATH}"
@@ -275,7 +283,8 @@ commands:
         listening() {
           python3 -c 'import socket;s=socket.socket();s.settimeout(0.5);s.connect(("127.0.0.1",9119))' 2>/dev/null
         }
-        # Supervised start (Architect E-20260809T003929Z): READY log alone is not liveness.
+        # Supervised start (Architect E-20260809T003929Z / E-20260809T005047Z):
+        # READY log alone is not liveness — mirror golden scaffold.
         pid="$(start_dash)"
         echo "Hermes dashboard postStart: launched pid=${pid} loopback 127.0.0.1:9119"
         ok=0
@@ -308,14 +317,15 @@ commands:
         else
           echo "WARN: dashboard still not listening — best-effort only; recovery: hermes dashboard --skip-build --host 0.0.0.0 --port 9119 --no-open"
         fi
-  # Prefer JAVA_HOME_21 (UDI contract). sdkman is not present on this
-  # seat's image — do not assume it. Pom targets Java 21.
+  # The UDI base image documents JAVA_HOME_<version> variables as the
+  # supported way to select a JDK (sdkman default is Java 17; the pom
+  # targets 21). Each Maven command selects Java 21 through that contract.
   - id: test
     exec:
       label: "1. Run tests (modernized)"
       component: development-tooling
       workingDir: /projects/modernized
-      commandLine: 'export JAVA_HOME="${JAVA_HOME_21:-${JAVA_HOME}}" && export PATH="${JAVA_HOME}/bin:${HOME}/.local/bin:${HOME}/.jbang/bin:${PATH}" && mvn -q test'
+      commandLine: 'export JAVA_HOME="${JAVA_HOME_21:-${JAVA_HOME}}" && export PATH="${JAVA_HOME}/bin:${PATH}" && mvn -q test'
       group:
         kind: test
         isDefault: true
@@ -324,7 +334,7 @@ commands:
       label: "2. Start Development mode (modernized, hot reload + debug)"
       component: development-tooling
       workingDir: /projects/modernized
-      commandLine: 'export JAVA_HOME="${JAVA_HOME_21:-${JAVA_HOME}}" && export PATH="${JAVA_HOME}/bin:${HOME}/.local/bin:${HOME}/.jbang/bin:${PATH}" && mvn compile quarkus:dev'
+      commandLine: 'export JAVA_HOME="${JAVA_HOME_21:-${JAVA_HOME}}" && export PATH="${JAVA_HOME}/bin:${PATH}" && mvn compile quarkus:dev'
       group:
         kind: run
         isDefault: true
